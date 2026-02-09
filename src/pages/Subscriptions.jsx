@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
     Plus,
     CreditCard,
@@ -9,21 +9,15 @@ import {
     CheckCircle2,
     Pause,
     Play,
-    Trash2
+    Trash2,
+    Loader2
 } from 'lucide-react'
+import { getAll, addRecord, updateRecord, deleteRecord, SHEETS } from '../services/api'
 
 const cycles = ['Monthly', 'Yearly']
 
-// Mock data
-const mockSubscriptions = [
-    { id: 1, name: 'ChatGPT Plus', cost: 20, cycle: 'Monthly', nextRenewal: '2026-02-15', active: true },
-    { id: 2, name: 'Claude Pro', cost: 20, cycle: 'Monthly', nextRenewal: '2026-02-20', active: true },
-    { id: 3, name: 'Humanizer Tool', cost: 15, cycle: 'Monthly', nextRenewal: '2026-03-01', active: true },
-    { id: 4, name: 'Grammarly Premium', cost: 144, cycle: 'Yearly', nextRenewal: '2026-08-15', active: true },
-    { id: 5, name: 'Quillbot', cost: 10, cycle: 'Monthly', nextRenewal: '2026-02-28', active: false },
-]
-
 function getDaysUntil(dateString) {
+    if (!dateString) return 999
     const today = new Date()
     const target = new Date(dateString)
     const diffTime = target - today
@@ -32,9 +26,11 @@ function getDaysUntil(dateString) {
 }
 
 export default function Subscriptions() {
-    const [subscriptions, setSubscriptions] = useState(mockSubscriptions)
+    const [subscriptions, setSubscriptions] = useState([])
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingSub, setEditingSub] = useState(null)
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
     const [formData, setFormData] = useState({
         name: '',
         cost: '',
@@ -43,31 +39,65 @@ export default function Subscriptions() {
         active: true
     })
 
+    useEffect(() => {
+        fetchSubscriptions()
+    }, [])
+
+    async function fetchSubscriptions() {
+        setLoading(true)
+        try {
+            const data = await getAll(SHEETS.SUBSCRIPTIONS)
+            if (data && Array.isArray(data)) {
+                const mapped = data.map(s => ({
+                    id: s.id,
+                    name: s['Service Name'] || '',
+                    cost: parseFloat(s.Cost) || 0,
+                    cycle: s.Cycle || 'Monthly',
+                    nextRenewal: s['Next Renewal Date'] || '',
+                    active: s['Active?'] === true || s['Active?'] === 'TRUE' || s['Active?'] === 'Yes'
+                }))
+                setSubscriptions(mapped)
+            }
+        } catch (error) {
+            console.error('Error fetching subscriptions:', error)
+        } finally {
+            setLoading(false)
+        }
+    }
+
     const activeSubscriptions = subscriptions.filter(s => s.active)
     const monthlyTotal = activeSubscriptions.reduce((sum, s) => {
-        return sum + (s.cycle === 'Monthly' ? s.cost : s.cost / 12)
+        return sum + (s.cycle === 'Yearly' ? s.cost / 12 : s.cost)
     }, 0)
     const yearlyTotal = monthlyTotal * 12
 
     const upcomingRenewals = activeSubscriptions.filter(s => getDaysUntil(s.nextRenewal) <= 7)
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault()
-        if (editingSub) {
-            setSubscriptions(subscriptions.map(s => s.id === editingSub.id ? {
-                ...s,
-                ...formData,
-                cost: Number(formData.cost)
-            } : s))
-        } else {
-            const newSub = {
-                id: Date.now(),
-                ...formData,
-                cost: Number(formData.cost)
+        setSaving(true)
+        try {
+            const payload = {
+                'Service Name': formData.name,
+                'Cost': formData.cost,
+                'Cycle': formData.cycle,
+                'Next Renewal Date': formData.nextRenewal,
+                'Active?': formData.active ? 'Yes' : 'No'
             }
-            setSubscriptions([...subscriptions, newSub])
+
+            if (editingSub) {
+                await updateRecord(SHEETS.SUBSCRIPTIONS, editingSub.id, payload)
+            } else {
+                await addRecord(SHEETS.SUBSCRIPTIONS, payload)
+            }
+            await fetchSubscriptions()
+            closeModal()
+        } catch (error) {
+            console.error('Error saving subscription:', error)
+            alert('Failed to save. Please try again.')
+        } finally {
+            setSaving(false)
         }
-        closeModal()
     }
 
     const openModal = (sub = null) => {
@@ -98,14 +128,33 @@ export default function Subscriptions() {
         setEditingSub(null)
     }
 
-    const toggleActive = (id) => {
-        setSubscriptions(subscriptions.map(s => s.id === id ? { ...s, active: !s.active } : s))
+    const toggleActive = async (sub) => {
+        try {
+            await updateRecord(SHEETS.SUBSCRIPTIONS, sub.id, { 'Active?': sub.active ? 'No' : 'Yes' })
+            setSubscriptions(subscriptions.map(s => s.id === sub.id ? { ...s, active: !s.active } : s))
+        } catch (error) {
+            console.error('Error toggling subscription:', error)
+        }
     }
 
-    const deleteSub = (id) => {
-        if (confirm('Are you sure you want to delete this subscription?')) {
-            setSubscriptions(subscriptions.filter(s => s.id !== id))
+    const deleteSub = async (sub) => {
+        if (confirm(`Are you sure you want to delete ${sub.name}?`)) {
+            try {
+                await deleteRecord(SHEETS.SUBSCRIPTIONS, sub.id)
+                await fetchSubscriptions()
+            } catch (error) {
+                console.error('Error deleting subscription:', error)
+                alert('Failed to delete. Please try again.')
+            }
         }
+    }
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+            </div>
+        )
     }
 
     return (
@@ -212,15 +261,15 @@ export default function Subscriptions() {
 
                             <div className="flex items-center gap-2 text-sm text-dark-400 mb-4">
                                 <Calendar className="w-4 h-4" />
-                                <span>Next: {new Date(sub.nextRenewal).toLocaleDateString()}</span>
+                                <span>Next: {sub.nextRenewal ? new Date(sub.nextRenewal).toLocaleDateString() : '-'}</span>
                             </div>
 
                             <div className="flex gap-2 pt-4 border-t border-dark-600/50">
                                 <button
-                                    onClick={() => toggleActive(sub.id)}
+                                    onClick={() => toggleActive(sub)}
                                     className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${sub.active
-                                            ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
-                                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                        ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
+                                        : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
                                         }`}
                                 >
                                     {sub.active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -233,7 +282,7 @@ export default function Subscriptions() {
                                     Edit
                                 </button>
                                 <button
-                                    onClick={() => deleteSub(sub.id)}
+                                    onClick={() => deleteSub(sub)}
                                     className="p-2 rounded-lg hover:bg-red-500/20 transition-colors"
                                 >
                                     <Trash2 className="w-4 h-4 text-red-400" />
@@ -243,6 +292,13 @@ export default function Subscriptions() {
                     )
                 })}
             </div>
+
+            {subscriptions.length === 0 && (
+                <div className="text-center py-12">
+                    <CreditCard className="w-16 h-16 text-dark-500 mx-auto mb-4" />
+                    <p className="text-dark-400">No subscriptions yet. Add your first subscription!</p>
+                </div>
+            )}
 
             {/* Add/Edit Modal */}
             {isModalOpen && (
@@ -310,7 +366,8 @@ export default function Subscriptions() {
                                 <button type="button" onClick={closeModal} className="btn-secondary flex-1">
                                     Cancel
                                 </button>
-                                <button type="submit" className="btn-primary flex-1">
+                                <button type="submit" disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                                     {editingSub ? 'Update' : 'Add Subscription'}
                                 </button>
                             </div>

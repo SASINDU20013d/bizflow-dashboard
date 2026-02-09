@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
     Plus,
     Calendar,
@@ -9,54 +9,51 @@ import {
     Filter,
     Clock,
     CheckCircle2,
-    AlertCircle
+    AlertCircle,
+    Loader2
 } from 'lucide-react'
+import { getAll, addRecord, updateRecord, SHEETS } from '../services/api'
 
 const statusOptions = ['All', 'Pending', 'In Progress', 'Completed']
 const projectTypes = ['Research Report', 'Assignment', 'University Project', 'Business Research', 'Other']
 const bankAccounts = ['BOC Account', 'Commercial Bank', 'Sampath Bank']
 
-// Mock data
-const mockProjects = [
-    { id: 1, customerId: 1, customerName: 'John Doe', type: 'Research Report', status: 'pending', deadline: '2026-02-15', price: 5000, paidAmount: 2500, bankAccount: 'BOC Account', notes: 'Topic: Market Analysis' },
-    { id: 2, customerId: 2, customerName: 'Jane Smith', type: 'Assignment', status: 'progress', deadline: '2026-02-12', price: 3500, paidAmount: 3500, bankAccount: 'Commercial Bank', notes: '' },
-    { id: 3, customerId: 3, customerName: 'Mike Johnson', type: 'University Project', status: 'progress', deadline: '2026-02-20', price: 8000, paidAmount: 4000, bankAccount: 'Sampath Bank', notes: 'Final year project' },
-    { id: 4, customerId: 4, customerName: 'Sara Williams', type: 'Research Report', status: 'completed', deadline: '2026-02-10', price: 6500, paidAmount: 6500, bankAccount: 'BOC Account', notes: '' },
-    { id: 5, customerId: 5, customerName: 'David Brown', type: 'Business Research', status: 'pending', deadline: '2026-02-25', price: 12000, paidAmount: 0, bankAccount: 'Commercial Bank', notes: 'Need source documents' },
-]
-
 function getStatusIcon(status) {
-    switch (status) {
+    const s = (status || '').toLowerCase().replace(' ', '')
+    switch (s) {
         case 'pending': return <AlertCircle className="w-4 h-4 text-yellow-400" />
-        case 'progress': return <Clock className="w-4 h-4 text-blue-400" />
+        case 'inprogress': return <Clock className="w-4 h-4 text-blue-400" />
         case 'completed': return <CheckCircle2 className="w-4 h-4 text-green-400" />
-        default: return null
+        default: return <AlertCircle className="w-4 h-4 text-yellow-400" />
     }
 }
 
 function getStatusBadge(status) {
+    const s = (status || '').toLowerCase().replace(' ', '')
     const badges = {
         pending: 'badge-pending',
-        progress: 'badge-progress',
+        inprogress: 'badge-progress',
         completed: 'badge-completed'
     }
     const labels = {
         pending: 'Pending',
-        progress: 'In Progress',
+        inprogress: 'In Progress',
         completed: 'Completed'
     }
-    return <span className={`badge ${badges[status]}`}>{labels[status]}</span>
+    return <span className={`badge ${badges[s] || 'badge-pending'}`}>{labels[s] || status}</span>
 }
 
 export default function Projects() {
-    const [projects, setProjects] = useState(mockProjects)
+    const [projects, setProjects] = useState([])
     const [filter, setFilter] = useState('All')
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingProject, setEditingProject] = useState(null)
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
     const [formData, setFormData] = useState({
-        customerName: '',
+        customerId: '',
         type: 'Assignment',
-        status: 'pending',
+        status: 'Pending',
         deadline: '',
         price: '',
         paidAmount: '',
@@ -64,38 +61,78 @@ export default function Projects() {
         notes: ''
     })
 
-    const filteredProjects = projects.filter(p =>
-        filter === 'All' ||
-        p.status === filter.toLowerCase().replace(' ', '')
-    )
+    useEffect(() => {
+        fetchProjects()
+    }, [])
 
-    const handleSubmit = (e) => {
-        e.preventDefault()
-        if (editingProject) {
-            setProjects(projects.map(p => p.id === editingProject.id ? {
-                ...p,
-                ...formData,
-                price: Number(formData.price),
-                paidAmount: Number(formData.paidAmount)
-            } : p))
-        } else {
-            const newProject = {
-                id: Date.now(),
-                customerId: Date.now(),
-                ...formData,
-                price: Number(formData.price),
-                paidAmount: Number(formData.paidAmount)
+    async function fetchProjects() {
+        setLoading(true)
+        try {
+            const data = await getAll(SHEETS.PROJECTS)
+            if (data && Array.isArray(data)) {
+                const mapped = data.map(p => ({
+                    id: p.id,
+                    customerId: p['Customer ID'] || '',
+                    customerName: p['Customer ID'] || 'Unknown',
+                    type: p['Project Type'] || 'Project',
+                    status: p.Status || 'Pending',
+                    deadline: p.Deadline || '',
+                    price: parseFloat(p.Price) || 0,
+                    paidAmount: parseFloat(p['Paid Amount']) || 0,
+                    bankAccount: p['Bank Account'] || '',
+                    notes: p.Notes || ''
+                }))
+                setProjects(mapped)
             }
-            setProjects([newProject, ...projects])
+        } catch (error) {
+            console.error('Error fetching projects:', error)
+        } finally {
+            setLoading(false)
         }
-        closeModal()
+    }
+
+    const filteredProjects = projects.filter(p => {
+        if (filter === 'All') return true
+        const projectStatus = (p.status || '').toLowerCase().replace(' ', '')
+        const filterStatus = filter.toLowerCase().replace(' ', '')
+        return projectStatus === filterStatus
+    })
+
+    const handleSubmit = async (e) => {
+        e.preventDefault()
+        setSaving(true)
+        try {
+            const payload = {
+                'Customer ID': formData.customerId,
+                'Project Type': formData.type,
+                'Status': formData.status,
+                'Deadline': formData.deadline,
+                'Price': formData.price,
+                'Paid Amount': formData.paidAmount || '0',
+                'Bank Account': formData.bankAccount,
+                'Notes': formData.notes
+            }
+
+            if (editingProject) {
+                await updateRecord(SHEETS.PROJECTS, editingProject.id, payload)
+            } else {
+                await addRecord(SHEETS.PROJECTS, payload)
+            }
+            await fetchProjects()
+            closeModal()
+        } catch (error) {
+            console.error('Error saving project:', error)
+            alert('Failed to save. Please try again.')
+        } finally {
+            setSaving(false)
+        }
     }
 
     const openModal = (project = null) => {
         if (project) {
             setEditingProject(project)
             setFormData({
-                customerName: project.customerName,
+                customerId: project.customerId,
                 type: project.type,
                 status: project.status,
                 deadline: project.deadline,
@@ -107,9 +144,9 @@ export default function Projects() {
         } else {
             setEditingProject(null)
             setFormData({
-                customerName: '',
+                customerId: '',
                 type: 'Assignment',
-                status: 'pending',
+                status: 'Pending',
                 deadline: '',
                 price: '',
                 paidAmount: '',
@@ -125,8 +162,21 @@ export default function Projects() {
         setEditingProject(null)
     }
 
-    const updateStatus = (id, newStatus) => {
-        setProjects(projects.map(p => p.id === id ? { ...p, status: newStatus } : p))
+    const updateStatus = async (project, newStatus) => {
+        try {
+            await updateRecord(SHEETS.PROJECTS, project.id, { Status: newStatus })
+            setProjects(projects.map(p => p.id === project.id ? { ...p, status: newStatus } : p))
+        } catch (error) {
+            console.error('Error updating status:', error)
+        }
+    }
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+            </div>
+        )
     }
 
     return (
@@ -152,8 +202,8 @@ export default function Projects() {
                             key={option}
                             onClick={() => setFilter(option)}
                             className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${filter === option
-                                    ? 'bg-gradient-to-r from-primary-500 to-accent-500 text-white'
-                                    : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                                ? 'bg-gradient-to-r from-primary-500 to-accent-500 text-white'
+                                : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
                                 }`}
                         >
                             {option}
@@ -181,7 +231,7 @@ export default function Projects() {
                                     </span>
                                     <span className="flex items-center gap-1">
                                         <Calendar className="w-4 h-4 text-dark-400" />
-                                        {new Date(project.deadline).toLocaleDateString()}
+                                        {project.deadline ? new Date(project.deadline).toLocaleDateString() : '-'}
                                     </span>
                                 </div>
                             </div>
@@ -198,21 +248,21 @@ export default function Projects() {
                                 </div>
                                 <div className="text-right">
                                     <p className="text-xs text-dark-400 mb-1">Bank</p>
-                                    <p className="text-sm text-dark-300">{project.bankAccount}</p>
+                                    <p className="text-sm text-dark-300">{project.bankAccount || '-'}</p>
                                 </div>
                             </div>
 
                             {/* Actions */}
                             <div className="flex items-center gap-2">
-                                {project.status !== 'completed' && (
+                                {project.status.toLowerCase() !== 'completed' && (
                                     <select
                                         value={project.status}
-                                        onChange={(e) => updateStatus(project.id, e.target.value)}
+                                        onChange={(e) => updateStatus(project, e.target.value)}
                                         className="input-field py-2 px-3 text-sm w-auto"
                                     >
-                                        <option value="pending">Pending</option>
-                                        <option value="progress">In Progress</option>
-                                        <option value="completed">Completed</option>
+                                        <option value="Pending">Pending</option>
+                                        <option value="In Progress">In Progress</option>
+                                        <option value="Completed">Completed</option>
                                     </select>
                                 )}
                                 <button
@@ -230,7 +280,7 @@ export default function Projects() {
             {filteredProjects.length === 0 && (
                 <div className="text-center py-12">
                     <FileText className="w-16 h-16 text-dark-500 mx-auto mb-4" />
-                    <p className="text-dark-400">No projects found</p>
+                    <p className="text-dark-400">{filter !== 'All' ? 'No projects with this status' : 'No projects yet. Add your first project!'}</p>
                 </div>
             )}
 
@@ -253,8 +303,8 @@ export default function Projects() {
                                 <input
                                     type="text"
                                     required
-                                    value={formData.customerName}
-                                    onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
+                                    value={formData.customerId}
+                                    onChange={(e) => setFormData({ ...formData, customerId: e.target.value })}
                                     className="input-field"
                                     placeholder="Enter customer name"
                                 />
@@ -333,7 +383,8 @@ export default function Projects() {
                                 <button type="button" onClick={closeModal} className="btn-secondary flex-1">
                                     Cancel
                                 </button>
-                                <button type="submit" className="btn-primary flex-1">
+                                <button type="submit" disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                                     {editingProject ? 'Update' : 'Create Project'}
                                 </button>
                             </div>

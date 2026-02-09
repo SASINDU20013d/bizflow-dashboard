@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
     Search,
     Plus,
@@ -8,44 +8,76 @@ import {
     X,
     User,
     Edit,
-    Trash2
+    Trash2,
+    Loader2
 } from 'lucide-react'
-
-// Mock data
-const mockCustomers = [
-    { id: 1, name: 'John Doe', mobile: '+94 77 123 4567', email: 'john@email.com', projects: 5, totalSpent: 25000 },
-    { id: 2, name: 'Jane Smith', mobile: '+94 76 987 6543', email: 'jane@email.com', projects: 3, totalSpent: 18000 },
-    { id: 3, name: 'Mike Johnson', mobile: '+94 71 555 8888', email: 'mike@email.com', projects: 8, totalSpent: 42000 },
-    { id: 4, name: 'Sara Williams', mobile: '+94 70 222 3333', email: 'sara@email.com', projects: 2, totalSpent: 12000 },
-    { id: 5, name: 'David Brown', mobile: '+94 75 444 7777', email: 'david@email.com', projects: 6, totalSpent: 35000 },
-]
+import { getAll, addRecord, updateRecord, deleteRecord, SHEETS } from '../services/api'
 
 export default function Customers() {
-    const [customers, setCustomers] = useState(mockCustomers)
+    const [customers, setCustomers] = useState([])
     const [searchQuery, setSearchQuery] = useState('')
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingCustomer, setEditingCustomer] = useState(null)
     const [formData, setFormData] = useState({ name: '', mobile: '', email: '', notes: '' })
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
+
+    useEffect(() => {
+        fetchCustomers()
+    }, [])
+
+    async function fetchCustomers() {
+        setLoading(true)
+        try {
+            const data = await getAll(SHEETS.CUSTOMERS)
+            if (data && Array.isArray(data)) {
+                const mapped = data.map(c => ({
+                    id: c.id,
+                    name: c.Name || '',
+                    mobile: c['Mobile Number'] || '',
+                    email: c.Email || '',
+                    notes: c.Notes || '',
+                    projects: 0,
+                    totalSpent: 0
+                }))
+                setCustomers(mapped)
+            }
+        } catch (error) {
+            console.error('Error fetching customers:', error)
+        } finally {
+            setLoading(false)
+        }
+    }
 
     const filteredCustomers = customers.filter(c =>
         c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.mobile.includes(searchQuery)
     )
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault()
-        if (editingCustomer) {
-            setCustomers(customers.map(c => c.id === editingCustomer.id ? { ...c, ...formData } : c))
-        } else {
-            const newCustomer = {
-                id: Date.now(),
-                ...formData,
-                projects: 0,
-                totalSpent: 0
+        setSaving(true)
+        try {
+            const payload = {
+                Name: formData.name,
+                'Mobile Number': formData.mobile,
+                Email: formData.email,
+                Notes: formData.notes
             }
-            setCustomers([newCustomer, ...customers])
+
+            if (editingCustomer) {
+                await updateRecord(SHEETS.CUSTOMERS, editingCustomer.id, payload)
+            } else {
+                await addRecord(SHEETS.CUSTOMERS, payload)
+            }
+            await fetchCustomers()
+            closeModal()
+        } catch (error) {
+            console.error('Error saving customer:', error)
+            alert('Failed to save. Please try again.')
+        } finally {
+            setSaving(false)
         }
-        closeModal()
     }
 
     const openModal = (customer = null) => {
@@ -65,10 +97,24 @@ export default function Customers() {
         setFormData({ name: '', mobile: '', email: '', notes: '' })
     }
 
-    const deleteCustomer = (id) => {
-        if (confirm('Are you sure you want to delete this customer?')) {
-            setCustomers(customers.filter(c => c.id !== id))
+    const handleDelete = async (customer) => {
+        if (confirm(`Are you sure you want to delete ${customer.name}?`)) {
+            try {
+                await deleteRecord(SHEETS.CUSTOMERS, customer.id)
+                await fetchCustomers()
+            } catch (error) {
+                console.error('Error deleting customer:', error)
+                alert('Failed to delete. Please try again.')
+            }
         }
+    }
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+            </div>
+        )
     }
 
     return (
@@ -111,7 +157,7 @@ export default function Customers() {
                                 <button onClick={() => openModal(customer)} className="p-2 rounded-lg hover:bg-dark-600 transition-colors">
                                     <Edit className="w-4 h-4 text-dark-300" />
                                 </button>
-                                <button onClick={() => deleteCustomer(customer.id)} className="p-2 rounded-lg hover:bg-red-500/20 transition-colors">
+                                <button onClick={() => handleDelete(customer)} className="p-2 rounded-lg hover:bg-red-500/20 transition-colors">
                                     <Trash2 className="w-4 h-4 text-red-400" />
                                 </button>
                             </div>
@@ -120,24 +166,11 @@ export default function Customers() {
                         <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2 text-dark-300">
                                 <Phone className="w-4 h-4 text-primary-400" />
-                                <span>{customer.mobile}</span>
+                                <span>{customer.mobile || '-'}</span>
                             </div>
                             <div className="flex items-center gap-2 text-dark-300">
                                 <Mail className="w-4 h-4 text-accent-400" />
-                                <span className="truncate">{customer.email}</span>
-                            </div>
-                        </div>
-                        <div className="mt-4 pt-4 border-t border-dark-600/50 flex justify-between">
-                            <div>
-                                <p className="text-xs text-dark-400">Projects</p>
-                                <p className="text-lg font-semibold text-white flex items-center gap-1">
-                                    <FolderKanban className="w-4 h-4 text-primary-400" />
-                                    {customer.projects}
-                                </p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-xs text-dark-400">Total Spent</p>
-                                <p className="text-lg font-semibold text-green-400">Rs. {customer.totalSpent.toLocaleString()}</p>
+                                <span className="truncate">{customer.email || '-'}</span>
                             </div>
                         </div>
                     </div>
@@ -147,7 +180,7 @@ export default function Customers() {
             {filteredCustomers.length === 0 && (
                 <div className="text-center py-12">
                     <User className="w-16 h-16 text-dark-500 mx-auto mb-4" />
-                    <p className="text-dark-400">No customers found</p>
+                    <p className="text-dark-400">{searchQuery ? 'No customers found' : 'No customers yet. Add your first customer!'}</p>
                 </div>
             )}
 
@@ -210,7 +243,8 @@ export default function Customers() {
                                 <button type="button" onClick={closeModal} className="btn-secondary flex-1">
                                     Cancel
                                 </button>
-                                <button type="submit" className="btn-primary flex-1">
+                                <button type="submit" disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                                     {editingCustomer ? 'Update' : 'Add Customer'}
                                 </button>
                             </div>

@@ -3,8 +3,8 @@
  * Connects to Google Apps Script backend
  */
 
-// TODO: Replace with your Google Apps Script Web App URL after deployment
-const API_BASE_URL = '';
+// Google Apps Script Web App URL
+const API_BASE_URL = 'https://script.google.com/macros/s/AKfycbxOy56uU979VH0dQyblk7QP_d4WDC3gRE5Z6A5oeQOVenP5rhDAImOTkxMLbMP4-_XQ1Q/exec';
 
 /**
  * Check if API is configured

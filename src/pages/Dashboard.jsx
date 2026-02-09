@@ -8,33 +8,22 @@ import {
     DollarSign,
     AlertCircle,
     CheckCircle2,
-    ArrowUpRight
+    ArrowUpRight,
+    Loader2
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { getDashboardStats, getAll, SHEETS, isApiConfigured } from '../services/api'
 
-// Mock data - will be replaced with Google Sheets API
-const mockStats = {
-    totalIncome: 125000,
-    pendingPayments: 45000,
-    activeProjects: 12,
-    completedProjects: 48,
-    totalCustomers: 24,
-    upcomingDeadlines: 5,
-    monthlySubscriptions: 2500
+// Fallback mock data (used when API is loading or unavailable)
+const defaultStats = {
+    totalIncome: 0,
+    pendingPayments: 0,
+    activeProjects: 0,
+    completedProjects: 0,
+    totalCustomers: 0,
+    upcomingDeadlines: 0,
+    monthlySubscriptions: 0
 }
-
-const mockRecentProjects = [
-    { id: 1, customer: 'John Doe', type: 'Research Report', deadline: '2026-02-15', status: 'pending', amount: 5000 },
-    { id: 2, customer: 'Jane Smith', type: 'Assignment', deadline: '2026-02-12', status: 'progress', amount: 3500 },
-    { id: 3, customer: 'Mike Johnson', type: 'University Project', deadline: '2026-02-20', status: 'progress', amount: 8000 },
-    { id: 4, customer: 'Sara Williams', type: 'Research Report', deadline: '2026-02-10', status: 'completed', amount: 6500 },
-]
-
-const mockUpcomingRenewals = [
-    { name: 'ChatGPT Plus', date: '2026-02-15', cost: 20 },
-    { name: 'Claude Pro', date: '2026-02-20', cost: 20 },
-    { name: 'Humanizer Tool', date: '2026-03-01', cost: 15 },
-]
 
 function StatCard({ icon: Icon, label, value, trend, trendUp, color }) {
     return (
@@ -59,23 +48,87 @@ function StatCard({ icon: Icon, label, value, trend, trendUp, color }) {
 }
 
 function getStatusBadge(status) {
+    const statusLower = (status || '').toLowerCase().replace(' ', '')
     const badges = {
         pending: 'badge-pending',
+        inprogress: 'badge-progress',
         progress: 'badge-progress',
         completed: 'badge-completed'
     }
     const labels = {
         pending: 'Pending',
+        inprogress: 'In Progress',
         progress: 'In Progress',
         completed: 'Completed'
     }
-    return <span className={`badge ${badges[status]}`}>{labels[status]}</span>
+    return <span className={`badge ${badges[statusLower] || 'badge-pending'}`}>{labels[statusLower] || status}</span>
 }
 
 export default function Dashboard() {
-    const [stats, setStats] = useState(mockStats)
-    const [recentProjects, setRecentProjects] = useState(mockRecentProjects)
-    const [renewals, setRenewals] = useState(mockUpcomingRenewals)
+    const [stats, setStats] = useState(defaultStats)
+    const [recentProjects, setRecentProjects] = useState([])
+    const [renewals, setRenewals] = useState([])
+    const [loading, setLoading] = useState(true)
+
+    useEffect(() => {
+        async function fetchData() {
+            setLoading(true)
+            try {
+                // Fetch stats
+                const statsData = await getDashboardStats()
+                if (statsData) {
+                    setStats(statsData)
+                }
+
+                // Fetch recent projects
+                const projectsData = await getAll(SHEETS.PROJECTS)
+                if (projectsData && Array.isArray(projectsData)) {
+                    // Sort by deadline and take first 4
+                    const sorted = projectsData
+                        .sort((a, b) => new Date(a.Deadline) - new Date(b.Deadline))
+                        .slice(0, 4)
+                        .map(p => ({
+                            id: p.id,
+                            customer: p['Customer ID'] || 'Unknown',
+                            type: p['Project Type'] || 'Project',
+                            deadline: p.Deadline || '',
+                            status: (p.Status || 'pending').toLowerCase().replace(' ', ''),
+                            amount: parseFloat(p.Price) || 0
+                        }))
+                    setRecentProjects(sorted)
+                }
+
+                // Fetch subscriptions for renewals
+                const subsData = await getAll(SHEETS.SUBSCRIPTIONS)
+                if (subsData && Array.isArray(subsData)) {
+                    const activeRenewals = subsData
+                        .filter(s => s['Active?'] === true || s['Active?'] === 'TRUE' || s['Active?'] === 'Yes')
+                        .map(s => ({
+                            name: s['Service Name'] || 'Subscription',
+                            date: s['Next Renewal Date'] || '',
+                            cost: parseFloat(s.Cost) || 0
+                        }))
+                        .sort((a, b) => new Date(a.date) - new Date(b.date))
+                        .slice(0, 3)
+                    setRenewals(activeRenewals)
+                }
+            } catch (error) {
+                console.error('Error fetching dashboard data:', error)
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        fetchData()
+    }, [])
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+            </div>
+        )
+    }
 
     return (
         <div className="space-y-8 animate-fade-in">
@@ -90,29 +143,25 @@ export default function Dashboard() {
                 <StatCard
                     icon={DollarSign}
                     label="Total Income"
-                    value={`Rs. ${stats.totalIncome.toLocaleString()}`}
-                    trend="+12%"
-                    trendUp={true}
+                    value={`Rs. ${(stats.totalIncome || 0).toLocaleString()}`}
                     color="from-green-500 to-emerald-600"
                 />
                 <StatCard
                     icon={Clock}
                     label="Pending Payments"
-                    value={`Rs. ${stats.pendingPayments.toLocaleString()}`}
+                    value={`Rs. ${(stats.pendingPayments || 0).toLocaleString()}`}
                     color="from-yellow-500 to-orange-500"
                 />
                 <StatCard
                     icon={FolderKanban}
                     label="Active Projects"
-                    value={stats.activeProjects}
+                    value={stats.activeProjects || 0}
                     color="from-primary-500 to-primary-600"
                 />
                 <StatCard
                     icon={Users}
                     label="Total Customers"
-                    value={stats.totalCustomers}
-                    trend="+3"
-                    trendUp={true}
+                    value={stats.totalCustomers || 0}
                     color="from-accent-500 to-accent-600"
                 />
             </div>
@@ -128,21 +177,25 @@ export default function Dashboard() {
                         </Link>
                     </div>
                     <div className="space-y-4">
-                        {recentProjects.map((project) => (
-                            <div key={project.id} className="flex items-center justify-between p-4 rounded-xl bg-dark-700/50 hover:bg-dark-700 transition-colors">
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-medium text-white truncate">{project.customer}</p>
-                                    <p className="text-sm text-dark-400">{project.type}</p>
+                        {recentProjects.length === 0 ? (
+                            <p className="text-dark-400 text-center py-8">No projects yet. Add your first project!</p>
+                        ) : (
+                            recentProjects.map((project) => (
+                                <div key={project.id} className="flex items-center justify-between p-4 rounded-xl bg-dark-700/50 hover:bg-dark-700 transition-colors">
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-white truncate">{project.customer}</p>
+                                        <p className="text-sm text-dark-400">{project.type}</p>
+                                    </div>
+                                    <div className="hidden sm:block text-center px-4">
+                                        <p className="text-sm text-dark-300">{project.deadline ? new Date(project.deadline).toLocaleDateString() : '-'}</p>
+                                    </div>
+                                    <div className="flex items-center gap-4">
+                                        {getStatusBadge(project.status)}
+                                        <p className="text-white font-medium hidden sm:block">Rs. {project.amount.toLocaleString()}</p>
+                                    </div>
                                 </div>
-                                <div className="hidden sm:block text-center px-4">
-                                    <p className="text-sm text-dark-300">{new Date(project.deadline).toLocaleDateString()}</p>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    {getStatusBadge(project.status)}
-                                    <p className="text-white font-medium hidden sm:block">Rs. {project.amount.toLocaleString()}</p>
-                                </div>
-                            </div>
-                        ))}
+                            ))
+                        )}
                     </div>
                 </div>
 
@@ -154,7 +207,7 @@ export default function Dashboard() {
                             <AlertCircle className="w-5 h-5 text-yellow-500" />
                             <h3 className="font-semibold text-white">Upcoming Deadlines</h3>
                         </div>
-                        <p className="text-3xl font-bold text-yellow-400">{stats.upcomingDeadlines}</p>
+                        <p className="text-3xl font-bold text-yellow-400">{stats.upcomingDeadlines || 0}</p>
                         <p className="text-sm text-dark-400 mt-1">projects due this week</p>
                     </div>
 
@@ -167,15 +220,19 @@ export default function Dashboard() {
                             </Link>
                         </div>
                         <div className="space-y-3">
-                            {renewals.map((renewal, idx) => (
-                                <div key={idx} className="flex items-center justify-between p-3 rounded-xl bg-dark-700/50">
-                                    <div>
-                                        <p className="text-sm font-medium text-white">{renewal.name}</p>
-                                        <p className="text-xs text-dark-400">{new Date(renewal.date).toLocaleDateString()}</p>
+                            {renewals.length === 0 ? (
+                                <p className="text-dark-400 text-sm">No active subscriptions</p>
+                            ) : (
+                                renewals.map((renewal, idx) => (
+                                    <div key={idx} className="flex items-center justify-between p-3 rounded-xl bg-dark-700/50">
+                                        <div>
+                                            <p className="text-sm font-medium text-white">{renewal.name}</p>
+                                            <p className="text-xs text-dark-400">{renewal.date ? new Date(renewal.date).toLocaleDateString() : '-'}</p>
+                                        </div>
+                                        <p className="text-sm font-semibold text-accent-400">${renewal.cost}</p>
                                     </div>
-                                    <p className="text-sm font-semibold text-accent-400">${renewal.cost}</p>
-                                </div>
-                            ))}
+                                ))
+                            )}
                         </div>
                     </div>
 
@@ -185,7 +242,7 @@ export default function Dashboard() {
                             <CheckCircle2 className="w-5 h-5 text-green-400" />
                             <h3 className="font-semibold text-white">Completed Projects</h3>
                         </div>
-                        <p className="text-4xl font-bold text-green-400">{stats.completedProjects}</p>
+                        <p className="text-4xl font-bold text-green-400">{stats.completedProjects || 0}</p>
                         <p className="text-sm text-dark-400 mt-1">all time</p>
                     </div>
                 </div>
